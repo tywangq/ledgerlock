@@ -20,9 +20,6 @@ concurrent transfers, and doing it without deadlocking.
   (`protoc --openapiv2_out`), bundled with the Swagger UI assets and embedded into the
   binary by `statik`, then served at `/swagger/index.html`. The running service
   documents itself; there is no separate docs deploy to drift out of sync.
-  The same spec is also published at
-  [SwaggerHub](https://app.swaggerhub.com/apis/IvyWang/bank/1.0) if you want to browse
-  the API without running anything.
 
 A second, Gin-based HTTP server carries the account, transfer, and session endpoints.
 **`main.go` currently starts the gateway and gRPC servers, not the Gin one** (see the
@@ -38,9 +35,13 @@ transfers move money in opposite directions between the same pair.
 
 Three things prevent that:
 
-1. **`SELECT ... FOR NO KEY UPDATE`** when reading the balance. `FOR UPDATE` would
-   also block the foreign-key checks that `INSERT INTO transfers` needs; `FOR NO KEY
-   UPDATE` takes a weaker lock that still serializes balance writes.
+1. **One atomic `UPDATE ... SET balance = balance + $amount ... RETURNING *` per
+   account** (`AddAccountBalance` in `db/query/account.sql`). The read and the write
+   are a single statement, so there is no read-then-write window for a concurrent
+   transfer to slip into, and the row lock it takes serializes balance writes. (An
+   earlier version read with `SELECT ... FOR NO KEY UPDATE` and wrote separately;
+   that query is still in the file and in git history, but `TransferTx` no longer
+   uses it.)
 2. **Consistent lock ordering.** `TransferTx` always updates the lower account ID
    first (`db/sqlc/store.go`), so two opposing transfers acquire locks in the same
    order and one waits instead of both deadlocking.
